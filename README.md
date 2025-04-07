@@ -2,6 +2,12 @@
 
 A radiation-hardened Firefox WebDriver bypass tool developed in accordance with JPL-STD-RUST-001 Rev A.
 
+## Architecture Overview
+
+![Architecture Diagram](resources/images/architecture_diagram.png)
+
+*Figure 1: System architecture showing the binary patching workflow*
+
 ## Overview
 
 This tool patches Firefox's `libxul.so` binary to bypass WebDriver detection mechanisms, allowing for automated browser testing without being detected as automation. It's implemented using memory-safe, radiation-hardened patterns suitable for mission-critical applications.
@@ -15,11 +21,23 @@ This tool patches Firefox's `libxul.so` binary to bypass WebDriver detection mec
 - **Fault Containment**: Comprehensive error handling with recovery mechanisms
 - **Temporal Predictability**: All operations have deterministic execution paths
 
+## Proof of Effectiveness
+
+The following screenshots demonstrate successful bypass of automation detection:
+
+### SannySoft Detection Test
+![SannySoft Detection Bypass](proof_20250407_131554/sannysoft_detection_131605.png)
+
+### CreepJS Detection Test
+![CreepJS Detection Bypass](proof_20250407_131554/creepjs_detection_131610.png)
+
+*Figures 2-3: Automation detection bypass proof on common detection platforms*
+
 ## Installation
 
-```bash
+```
 # Clone the repository
-git clone https://github.com/yourusername/undetected_geckodriver.git
+git clone https://github.com/coleleavitt/undetected_geckodriver.git
 cd undetected_geckodriver
 
 # Build the project with radiation-hardened configurations
@@ -28,7 +46,7 @@ make build
 
 ## Usage
 
-```bash
+```
 # Patch Firefox's libxul.so to bypass WebDriver detection
 undetected_geckodriver /opt/firefox/libxul.so
 
@@ -40,7 +58,7 @@ cargo test
 
 For optimal undetectability, add these preferences to your Firefox profile:
 
-```javascript
+```
 user_pref("dom.webdriver.enabled", false);
 user_pref("devtools.selfxss.count", 0);
 user_pref("marionette.enabled", false);
@@ -56,10 +74,10 @@ user_pref("remote.force-local", true);
 This implementation follows JPL-STD-RUST-001 Rev A guidelines for radiation-hardened software:
 
 1. **Triple Modular Redundancy (TMR)**: Critical operations use the `tmr_vote!` macro for fault tolerance:
-   ```rust
-   // Majority voting mechanism for fault tolerance
-   tmr_vote!(1, 1, 0)  // Returns 1 (majority vote)
-   tmr_vote!(0, 0, 1)  // Returns 0 (majority vote)
+   ```
+// Majority voting mechanism for fault tolerance
+tmr_vote!(1, 1, 0)  // Returns 1 (majority vote)
+tmr_vote!(0, 0, 1)  // Returns 0 (majority vote)
    ```
 
 2. **SEU (Single Event Upset) Resistance**: Pattern replacements use Hamming-encoded data to ensure data integrity
@@ -89,7 +107,7 @@ The test suite verifies:
 
 Run tests with:
 
-```bash
+```
 cargo test
 ```
 
