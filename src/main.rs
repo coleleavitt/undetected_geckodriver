@@ -119,7 +119,10 @@ impl BinaryLoader for HardenedLoader {
     fn load(&self, path: &str) -> Result<Vec<u8>> {
         let path = Path::new(path);
         if !path.exists() {
-            return Err(PatcherError::InvalidInput(format!("File not found: {}", path.display())));
+            return Err(PatcherError::InvalidInput(format!(
+                "File not found: {}",
+                path.display()
+            )));
         }
 
         let metadata = fs::metadata(path)?;
@@ -129,11 +132,11 @@ impl BinaryLoader for HardenedLoader {
         println!("Loading {} ({}MB)", path.display(), file_size / 1_048_576);
 
         if file_size > MAX_BINARY_SIZE {
-            return Err(PatcherError::MemoryExceeded(
-                format!("File exceeds {}MB limit (size: {}MB)",
-                        MAX_BINARY_SIZE / 1_048_576,
-                        file_size / 1_048_576)
-            ));
+            return Err(PatcherError::MemoryExceeded(format!(
+                "File exceeds {}MB limit (size: {}MB)",
+                MAX_BINARY_SIZE / 1_048_576,
+                file_size / 1_048_576
+            )));
         }
 
         // Optimized file loading with buffered I/O
@@ -146,7 +149,9 @@ impl BinaryLoader for HardenedLoader {
         // TMR validation
         let len = data.len();
         if tmr_vote!(len, data.len(), data.capacity()) != len {
-            return Err(PatcherError::MemoryExceeded("Memory corruption detected".into()));
+            return Err(PatcherError::MemoryExceeded(
+                "Memory corruption detected".into(),
+            ));
         }
 
         Ok(data)
@@ -154,7 +159,10 @@ impl BinaryLoader for HardenedLoader {
 
     #[allow(clippy::cast_precision_loss)]
     fn parse_elf<'a>(&self, data: &'a [u8]) -> Result<Elf<'a>> {
-        println!("Parsing ELF binary ({:.2}MB)...", data.len() as f64 / 1_048_576.0);
+        println!(
+            "Parsing ELF binary ({:.2}MB)...",
+            data.len() as f64 / 1_048_576.0
+        );
         Elf::parse(data).map_err(|e| PatcherError::ElfParsing(e.to_string()))
     }
 }
@@ -205,7 +213,10 @@ impl PatternDetector for WebdriverDetector {
 
         while let Some(offset) = find_subsequence(&data[pos..], pattern) {
             let global_offset = pos + offset;
-            matches.push((global_offset, &data[global_offset..global_offset + pattern.len()]));
+            matches.push((
+                global_offset,
+                &data[global_offset..global_offset + pattern.len()],
+            ));
             pos = global_offset + pattern.len();
 
             // Limit excessive matches to prevent DoS
@@ -305,14 +316,20 @@ impl FileOperations for ValidatingFileOps {
                 std::io::stdout().flush().ok();
             }
         }
-        println!("\nBackup completed in {:.2}s", start.elapsed().as_secs_f32());
+        println!(
+            "\nBackup completed in {:.2}s",
+            start.elapsed().as_secs_f32()
+        );
 
         Ok(())
     }
 
     #[allow(clippy::cast_precision_loss)]
     fn write_binary(&self, path: &str, data: &[u8]) -> Result<()> {
-        println!("Writing patched binary ({:.2}MB)...", data.len() as f64 / 1_048_576.0);
+        println!(
+            "Writing patched binary ({:.2}MB)...",
+            data.len() as f64 / 1_048_576.0
+        );
 
         // Use buffered writer for better performance with large files
         let file = fs::File::create(path)?;
@@ -406,40 +423,35 @@ where
                 .iter()
                 .find(|s| elf.shdr_strtab.get_at(s.sh_name) == Some(section))
             {
-                println!(
-                    "Processing section: {} ({:.2} MB)",
-                    section,
-                    {
-                        const MEGABYTE: u64 = 1_048_576;
+                println!("Processing section: {} ({:.2} MB)", section, {
+                    const MEGABYTE: u64 = 1_048_576;
 
-                        // Calculate size components using integer arithmetic only
-                        let whole_mb = shdr.sh_size / MEGABYTE;
-                        let remainder_bytes = shdr.sh_size % MEGABYTE;
-                        let hundredths = (remainder_bytes * 100) / MEGABYTE;
+                    // Calculate size components using integer arithmetic only
+                    let whole_mb = shdr.sh_size / MEGABYTE;
+                    let remainder_bytes = shdr.sh_size % MEGABYTE;
+                    let hundredths = (remainder_bytes * 100) / MEGABYTE;
 
-                        // Format using the new inline variable syntax to address uninlined_format_args warnings
-                        let size_mb_string = if whole_mb == 0 {
-                            format!("0.{hundredths:02}")
-                        } else if whole_mb <= 9999 {
-                            format!("{whole_mb}.{hundredths:02}")
-                        } else {
-                            // For very large sections, use string manipulation for scientific notation
-                            // to avoid floating-point precision loss entirely
-                            let mb_str = whole_mb.to_string();
-                            let exp = mb_str.len().saturating_sub(1); // Safe subtraction
+                    // Format using the new inline variable syntax to address uninlined_format_args warnings
+                    let size_mb_string = if whole_mb == 0 {
+                        format!("0.{hundredths:02}")
+                    } else if whole_mb <= 9999 {
+                        format!("{whole_mb}.{hundredths:02}")
+                    } else {
+                        // For very large sections, use string manipulation for scientific notation
+                        // to avoid floating-point precision loss entirely
+                        let mb_str = whole_mb.to_string();
+                        let exp = mb_str.len().saturating_sub(1); // Safe subtraction
 
-                            // Extract digits using string operations instead of numeric conversion
-                            let first_digit = &mb_str[0..1];
-                            let second_digit = if mb_str.len() > 1 { &mb_str[1..2] } else { "0" };
+                        // Extract digits using string operations instead of numeric conversion
+                        let first_digit = &mb_str[0..1];
+                        let second_digit = if mb_str.len() > 1 { &mb_str[1..2] } else { "0" };
 
-                            format!("{first_digit}.{second_digit}e{exp}")
-                        };
+                        format!("{first_digit}.{second_digit}e{exp}")
+                    };
 
-                        // Parse the formatted string to get the f64 for display formatting
-                        size_mb_string.parse::<f64>().unwrap_or(0.0)
-                    }
-                );
-
+                    // Parse the formatted string to get the f64 for display formatting
+                    size_mb_string.parse::<f64>().unwrap_or(0.0)
+                });
 
                 let section_patches = self.process_section(shdr, &data, &mut patched)?;
                 println!("Found {section_patches} patterns in {section}");
@@ -463,7 +475,10 @@ where
             println!("No WebDriver detection patterns found to patch");
         }
 
-        println!("Operation completed in {:.2}s", start.elapsed().as_secs_f32());
+        println!(
+            "Operation completed in {:.2}s",
+            start.elapsed().as_secs_f32()
+        );
         Ok(total)
     }
 
@@ -480,15 +495,13 @@ where
         patched: &mut [u8],
     ) -> Result<usize> {
         // Properly handle the Result from try_from with error propagation
-        let start = usize::try_from(shdr.sh_offset)
-            .map_err(|e| PatcherError::InvalidInput(format!(
-                "Section offset conversion error: {e}"
-            )))?;
+        let start = usize::try_from(shdr.sh_offset).map_err(|e| {
+            PatcherError::InvalidInput(format!("Section offset conversion error: {e}"))
+        })?;
 
-        let size = usize::try_from(shdr.sh_size)
-            .map_err(|e| PatcherError::InvalidInput(format!(
-                "Section size conversion error: {e}"
-            )))?;
+        let size = usize::try_from(shdr.sh_size).map_err(|e| {
+            PatcherError::InvalidInput(format!("Section size conversion error: {e}"))
+        })?;
 
         // Bounds validation to prevent out-of-bounds access
         if start >= data.len() {
@@ -498,10 +511,7 @@ where
         }
 
         // Use saturating_add to prevent overflow in critical calculations
-        let end = std::cmp::min(
-            start.saturating_add(size),
-            data.len()
-        );
+        let end = std::cmp::min(start.saturating_add(size), data.len());
 
         let section_data = &data[start..end];
 
@@ -516,11 +526,9 @@ where
                     continue;
                 }
 
-                let replacement = self.replacer.replace_pattern(
-                    patched,
-                    global_offset,
-                    pattern
-                );
+                let replacement = self
+                    .replacer
+                    .replace_pattern(patched, global_offset, pattern);
 
                 if !replacement.is_empty() {
                     // Print hex representation of the pattern and replacement
@@ -563,7 +571,9 @@ where
 /// Returns the offset of the first match, or None if no match is found.
 #[must_use]
 fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack.windows(needle.len()).position(|window| window == needle)
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 /// Prints recommended Firefox preferences for `WebDriver` disabling.
@@ -615,7 +625,6 @@ impl SystemOperations {
         PathBuf::from("/opt/firefox/firefox")
     }
 
-
     /// Finds an available port for use.
     ///
     /// # Panics
@@ -628,15 +637,13 @@ impl SystemOperations {
     pub fn find_free_port() -> Result<u16> {
         TcpListener::bind("127.0.0.1:0")
             .map(|listener| {
-                listener.local_addr()
-                    .map_or_else(
-                        |_| panic!("Failed to get local address from listener"),
-                        |addr| addr.port()
-                    )
+                listener.local_addr().map_or_else(
+                    |_| panic!("Failed to get local address from listener"),
+                    |addr| addr.port(),
+                )
             })
             .map_err(|e| PatcherError::SystemOperation(format!("Failed to bind to address: {e}")))
     }
-
 
     /// Creates a backup of the original libxul.so file.
     ///
@@ -656,20 +663,22 @@ impl SystemOperations {
             println!("You may be prompted for your password by a graphical dialog");
 
             // Use pkexec for graphical authentication dialog
-            let orig_path_str = orig_path.to_str()
+            let orig_path_str = orig_path
+                .to_str()
                 .ok_or_else(|| PatcherError::SystemOperation("Invalid origin path".into()))?;
-            let backup_path_str = backup_path.to_str()
+            let backup_path_str = backup_path
+                .to_str()
                 .ok_or_else(|| PatcherError::SystemOperation("Invalid backup path".into()))?;
 
             let status = Command::new("pkexec")
                 .args(["cp", orig_path_str, backup_path_str])
                 .status()
-                .map_err(|e| {
-                    PatcherError::SystemOperation(format!("Backup failed: {e}"))
-                })?;
+                .map_err(|e| PatcherError::SystemOperation(format!("Backup failed: {e}")))?;
 
             if !status.success() {
-                return Err(PatcherError::SystemOperation("Backup command failed".into()));
+                return Err(PatcherError::SystemOperation(
+                    "Backup command failed".into(),
+                ));
             }
         }
         Ok(())
@@ -693,20 +702,22 @@ impl SystemOperations {
             println!("You may be prompted for your password by a graphical dialog");
 
             // Use pkexec for consistency with backup function
-            let orig_path_str = orig_path.to_str()
+            let orig_path_str = orig_path
+                .to_str()
                 .ok_or_else(|| PatcherError::SystemOperation("Invalid origin path".into()))?;
-            let backup_path_str = backup_path.to_str()
+            let backup_path_str = backup_path
+                .to_str()
                 .ok_or_else(|| PatcherError::SystemOperation("Invalid backup path".into()))?;
 
             let status = Command::new("pkexec")
                 .args(["cp", backup_path_str, orig_path_str])
                 .status()
-                .map_err(|e| {
-                    PatcherError::SystemOperation(format!("Restore failed: {e}"))
-                })?;
+                .map_err(|e| PatcherError::SystemOperation(format!("Restore failed: {e}")))?;
 
             if !status.success() {
-                return Err(PatcherError::SystemOperation("Restore command failed".into()));
+                return Err(PatcherError::SystemOperation(
+                    "Restore command failed".into(),
+                ));
             }
         }
         Ok(())
@@ -750,8 +761,8 @@ impl SystemOperations {
         let xul_path = Path::new(SYSTEM_FIREFOX_DIR).join("libxul.so");
 
         // Read file
-        let mut data = fs::read(&xul_path)
-            .map_err(|e| PatcherError::SystemOperation(e.to_string()))?;
+        let mut data =
+            fs::read(&xul_path).map_err(|e| PatcherError::SystemOperation(e.to_string()))?;
 
         // Generate random string of the same length
         let random_string: Vec<u8> = (0..WEBDRIVER_STRING.len())
@@ -759,7 +770,8 @@ impl SystemOperations {
             .collect();
 
         // Count occurrences before patching
-        let occurrences_before = data.windows(WEBDRIVER_STRING.len())
+        let occurrences_before = data
+            .windows(WEBDRIVER_STRING.len())
             .filter(|window| *window == WEBDRIVER_STRING)
             .count();
 
@@ -782,7 +794,8 @@ impl SystemOperations {
             println!("Replaced {replaced} occurrences of 'webdriver'");
 
             // Write patched file using sudo/pkexec
-            let xul_path_str = xul_path.to_str()
+            let xul_path_str = xul_path
+                .to_str()
                 .ok_or_else(|| PatcherError::SystemOperation("Invalid libxul path".into()))?;
 
             let mut child = Command::new("pkexec")
@@ -792,7 +805,9 @@ impl SystemOperations {
                 .spawn()
                 .map_err(|e| PatcherError::SystemOperation(e.to_string()))?;
 
-            child.stdin.as_mut()
+            child
+                .stdin
+                .as_mut()
                 .expect("Failed to open stdin for pkexec command")
                 .write_all(&data)
                 .map_err(|e| PatcherError::SystemOperation(e.to_string()))?;
@@ -842,7 +857,9 @@ fn main() -> Result<()> {
             // Fix unused variable warning by properly using msg
             if let PatcherError::MemoryExceeded(msg) = &e {
                 eprintln!("\nMemory limit exceeded: {msg}");
-                eprintln!("Suggestion: Edit MAX_BINARY_SIZE in main.rs to accommodate larger files.");
+                eprintln!(
+                    "Suggestion: Edit MAX_BINARY_SIZE in main.rs to accommodate larger files."
+                );
                 eprintln!("Current limit is set to {}MB.", MAX_BINARY_SIZE / 1_048_576);
             }
 
