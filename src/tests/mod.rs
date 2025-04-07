@@ -18,20 +18,20 @@ macro_rules! tmr_vote {
 #[cfg(test)]
 mod tests {
     use crate::{
-        PatternReplacer, SeuResistantReplacer, SystemOperations, MAX_PATTERN_LENGTH,
-        SYSTEM_FIREFOX_DIR, WEBDRIVER_STRING,
+        MAX_PATTERN_LENGTH, PatternReplacer, SYSTEM_FIREFOX_DIR, SeuResistantReplacer,
+        SystemOperations, WEBDRIVER_STRING,
     };
     use serde_json::Value;
     use std::io::{BufRead, BufReader, Read, Write};
     use std::path::{Path, PathBuf};
+    use std::process::Command as StdCommand;
     use std::process::Stdio;
     use std::time::Duration;
     use std::{env, fs, process, thread};
     use thirtyfour::common::capabilities::firefox::FirefoxPreferences;
     use thirtyfour::{
-        error::WebDriverResult, BrowserCapabilitiesHelper, DesiredCapabilities, WebDriver,
+        BrowserCapabilitiesHelper, DesiredCapabilities, WebDriver, error::WebDriverResult,
     };
-    use std::process::Command as StdCommand;
 
     const TEST_TIMEOUT_SEC: u64 = 60;
 
@@ -113,11 +113,12 @@ mod tests {
         let proof_dir = format!("proof_{}", timestamp);
 
         // Create directory with proper error handling
-        fs::create_dir_all(&proof_dir).map_err(|e|
+        fs::create_dir_all(&proof_dir).map_err(|e| {
             thirtyfour::error::WebDriverError::FatalError(format!(
-                "Failed to create proof directory: {}", e
+                "Failed to create proof directory: {}",
+                e
             ))
-        )?;
+        })?;
 
         println!("Created screenshot directory: {}", proof_dir);
 
@@ -188,15 +189,17 @@ mod tests {
             .map_err(|e| thirtyfour::error::WebDriverError::FatalError(e.to_string()))?;
 
         // Get stdout and stderr handles from the child process
-        let stdout = geckodriver_process.stdout.take()
-            .ok_or_else(|| thirtyfour::error::WebDriverError::FatalError(
-                "Failed to capture stdout from geckodriver process".to_string()
-            ))?;
+        let stdout = geckodriver_process.stdout.take().ok_or_else(|| {
+            thirtyfour::error::WebDriverError::FatalError(
+                "Failed to capture stdout from geckodriver process".to_string(),
+            )
+        })?;
 
-        let stderr = geckodriver_process.stderr.take()
-            .ok_or_else(|| thirtyfour::error::WebDriverError::FatalError(
-                "Failed to capture stderr from geckodriver process".to_string()
-            ))?;
+        let stderr = geckodriver_process.stderr.take().ok_or_else(|| {
+            thirtyfour::error::WebDriverError::FatalError(
+                "Failed to capture stderr from geckodriver process".to_string(),
+            )
+        })?;
 
         // Spawn threads to handle the output in real-time
         thread::spawn(move || {
@@ -315,10 +318,12 @@ mod tests {
     /// Returns a `WebDriverError` if screenshot capture or saving fails
     async fn take_screenshot(driver: &WebDriver, dir: &str, name: &str) -> WebDriverResult<()> {
         // Get the project directory
-        let project_dir = env::current_dir()
-            .map_err(|e| thirtyfour::error::WebDriverError::FatalError(
-                format!("Failed to get current directory: {}", e)
-            ))?;
+        let project_dir = env::current_dir().map_err(|e| {
+            thirtyfour::error::WebDriverError::FatalError(format!(
+                "Failed to get current directory: {}",
+                e
+            ))
+        })?;
 
         // Construct a path with timestamp to avoid overwrites
         let timestamp = chrono::Local::now().format("%H%M%S").to_string();
@@ -326,24 +331,26 @@ mod tests {
         let filename = screenshot_dir.join(format!("{}_{}.png", name, timestamp));
 
         // Ensure the directory exists
-        fs::create_dir_all(&screenshot_dir)
-            .map_err(|e| thirtyfour::error::WebDriverError::FatalError(
-                format!("Failed to create screenshot directory: {}", e)
-            ))?;
+        fs::create_dir_all(&screenshot_dir).map_err(|e| {
+            thirtyfour::error::WebDriverError::FatalError(format!(
+                "Failed to create screenshot directory: {}",
+                e
+            ))
+        })?;
 
         // Take screenshot and save it directly to the file
-        driver.screenshot(&filename)
-            .await
-            .map_err(|e| thirtyfour::error::WebDriverError::FatalError(
-                format!("Failed to save screenshot to {}: {}", filename.display(), e)
-            ))?;
+        driver.screenshot(&filename).await.map_err(|e| {
+            thirtyfour::error::WebDriverError::FatalError(format!(
+                "Failed to save screenshot to {}: {}",
+                filename.display(),
+                e
+            ))
+        })?;
 
         println!("Screenshot saved: {}", filename.display());
 
         Ok(())
     }
-
-
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_webdriver_detection() -> WebDriverResult<()> {
