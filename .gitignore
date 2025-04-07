@@ -1,0 +1,7 @@
+/target
+libxul.so
+libxul.so.bak
+.idea
+Cargo.lock
+page_source.html
+webdriver_test_result.png
