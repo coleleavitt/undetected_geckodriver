@@ -74,11 +74,11 @@ user_pref("remote.force-local", true);
 This implementation follows JPL-STD-RUST-001 Rev A guidelines for radiation-hardened software:
 
 1. **Triple Modular Redundancy (TMR)**: Critical operations use the `tmr_vote!` macro for fault tolerance:
-```rust
-// Majority voting mechanism for fault tolerance
-tmr_vote!(1, 1, 0)  // Returns 1 (majority vote)
-tmr_vote!(0, 0, 1)  // Returns 0 (majority vote)
-```
+   ```rust
+   // Majority voting mechanism for fault tolerance
+   tmr_vote!(1, 1, 0)  // Returns 1 (majority vote)
+   tmr_vote!(0, 0, 1)  // Returns 0 (majority vote)
+   ```
 
 
 
