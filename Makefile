@@ -27,19 +27,21 @@ check:
 fmt:
 	cargo fmt
 
-# Generate code coverage report
 coverage:
 	# Clean previous results
 	$(MAKE) clean
 
+	# First build the binary normally so it exists for the tests
+	cargo build
+
 	# Set up environment variables for coverage instrumentation
 	CARGO_INCREMENTAL=0 \
-	RUSTFLAGS="-Cinstrument-coverage -Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Zpanic_abort_tests -Cpanic=abort" \
+	RUSTFLAGS="-Cinstrument-coverage -Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off" \
 	LLVM_PROFILE_FILE="undetected_geckodriver-%p-%m.profraw" \
 	cargo test --verbose
 
 	# Generate coverage report with grcov
-	grcov . --binary-path ./target/debug/deps/ \
+	grcov . --binary-path ./target/debug/ \
 		-s . \
 		-t html \
 		--branch \

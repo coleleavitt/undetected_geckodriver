@@ -4,4 +4,4 @@ libxul.so.bak*
 .idea
 Cargo.lock
 page_source.html
-webdriver_test_result.png
+webdriver_test_result.png!/src/tests.rs

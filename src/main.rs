@@ -1,3 +1,4 @@
+#![feature(internal_output_capture)]
 //! Firefox WebDriver Detection Bypass Tool
 //!
 //! This tool patches Firefox binaries to bypass WebDriver detection mechanisms
@@ -206,25 +207,24 @@ impl PatternDetector for WebdriverPatternDetector {
         section_start: usize,
         pattern: &[u8],
     ) -> Vec<(usize, &'a [u8])> {
-        // Validate inputs
         if section_data.is_empty() || pattern.is_empty() {
+            return Vec::new();
+        }
+
+        let pattern_len = pattern.len();
+        let section_len = section_data.len();
+
+        if pattern_len > section_len {
             return Vec::new();
         }
 
         let mut results = Vec::new();
         let mut pos = 0;
-        let pattern_len = pattern.len();
-        let section_len = section_data.len();
-
-        // Avoid potential integer overflow by using saturating_sub
         let max_pos = section_len.saturating_sub(pattern_len);
 
-        while pos < max_pos {
-            // Check for pattern match
+        while pos <= max_pos {
             if &section_data[pos..pos + pattern_len] == pattern {
-                let global_offset = section_start + pos;
-                results.push((global_offset, &section_data[pos..pos + pattern_len]));
-                // Skip to position after the found pattern
+                results.push((section_start + pos, &section_data[pos..pos + pattern_len]));
                 pos += pattern_len;
             } else {
                 pos += 1;
@@ -233,6 +233,7 @@ impl PatternDetector for WebdriverPatternDetector {
 
         results
     }
+
 }
 
 /// Random byte pattern replacer implementation
@@ -516,11 +517,16 @@ fn print_firefox_preferences() {
 }
 
 fn main() {
-    // Parse command line arguments
     let args: Vec<String> = env::args().collect();
+    let exit_code = process_args(&args);
+    std::process::exit(exit_code);
+}
+
+// Testable function that handles the application logic
+pub fn process_args(args: &[String]) -> i32 {
     if args.len() < 2 {
         println!("Usage: {} <path_to_firefox_binary>", args[0]);
-        std::process::exit(1);
+        return 1;
     }
 
     let firefox_path = &args[1];
@@ -543,10 +549,11 @@ fn main() {
 
             // Print additional instructions
             print_firefox_preferences();
+            0 // Success exit code
         }
         Err(e) => {
             eprintln!("Error: {:?}", e);
-            std::process::exit(1);
+            1 // Error exit code
         }
     }
 }
