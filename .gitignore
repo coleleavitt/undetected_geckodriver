@@ -1,6 +1,6 @@
 /target
-libxul.so
-libxul.so.bak
+libxul.so*
+libxul.so.bak*
 .idea
 Cargo.lock
 page_source.html
