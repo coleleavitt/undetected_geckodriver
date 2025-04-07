@@ -4,7 +4,7 @@ A radiation-hardened Firefox WebDriver bypass tool developed in accordance with 
 
 ## Architecture Overview
 
-![Architecture Diagram](resources/images/architecture_diagram.png)
+Architecture Diagram
 
 *Figure 1: System architecture showing the binary patching workflow*
 
@@ -26,39 +26,45 @@ This tool patches Firefox's `libxul.so` binary to bypass WebDriver detection mec
 The following screenshots demonstrate successful bypass of automation detection:
 
 ### SannySoft Detection Test
-![SannySoft Detection Bypass](proof_20250407_131554/sannysoft_detection_131605.png)
+SannySoft Detection Bypass
 
 ### CreepJS Detection Test
-![CreepJS Detection Bypass](proof_20250407_131554/creepjs_detection_131610.png)
+CreepJS Detection Bypass
 
 *Figures 2-3: Automation detection bypass proof on common detection platforms*
 
 ## Installation
 
-```
+```bash
 # Clone the repository
 git clone https://github.com/coleleavitt/undetected_geckodriver.git
 cd undetected_geckodriver
 
+# Verify all prerequisites are installed
+make check-prereqs
+
 # Build the project with radiation-hardened configurations
 make build
+
+# For JPL-compliant enhanced hardening
+make jpl-build
 ```
 
 ## Usage
 
-```
+```bash
 # Patch Firefox's libxul.so to bypass WebDriver detection
 undetected_geckodriver /opt/firefox/libxul.so
 
 # Run automated tests with the patched Firefox
-cargo test
+make test
 ```
 
 ### Recommended Firefox Preferences
 
 For optimal undetectability, add these preferences to your Firefox profile:
 
-```
+```javascript
 user_pref("dom.webdriver.enabled", false);
 user_pref("devtools.selfxss.count", 0);
 user_pref("marionette.enabled", false);
@@ -66,6 +72,33 @@ user_pref("remote.enabled", false);
 user_pref("remote.log.level", "Fatal");
 user_pref("remote.force-local", true);
 ```
+
+## Development & Verification
+
+### Build Targets
+- `make build`: Standard radiation-hardened build
+- `make jpl-build`: Enhanced JPL-compliant release build with additional hardening
+- `make test`: Run tests with radiation hardening enabled
+- `make clean`: Remove build artifacts and coverage data
+
+### Verification Targets
+- `make check`: Run all verification checks
+- `make jpl-verify`: Run all JPL-specific verification checks
+- `make static-analysis`: Run Clippy for code analysis
+- `make static-bounds-check`: Verify all loops have static bounds
+- `make memory-safety-check`: Verify memory safety patterns
+- `make tmr-check`: Verify Triple Modular Redundancy patterns
+- `make formal-verify`: Run formal verification tools if available
+- `make radiation-hardening`: Verify radiation hardening patterns
+
+### Documentation & Reports
+- `make jpl-docs`: Generate JPL-compliant documentation
+- `make verification-report`: Generate comprehensive verification report
+- `make coverage`: Generate code coverage report
+
+### Dependency Management
+- `make dependency-verify`: Verify dependency supply chain security
+- `make lock-dependencies`: Lock dependencies for reproducible builds
 
 ## Implementation Details
 
@@ -79,8 +112,6 @@ This implementation follows JPL-STD-RUST-001 Rev A guidelines for radiation-hard
    tmr_vote!(1, 1, 0)  // Returns 1 (majority vote)
    tmr_vote!(0, 0, 1)  // Returns 0 (majority vote)
    ```
-
-
 
 2. **SEU (Single Event Upset) Resistance**: Pattern replacements use Hamming-encoded data to ensure data integrity
 
@@ -109,8 +140,14 @@ The test suite verifies:
 
 Run tests with:
 
+```bash
+make test
 ```
-cargo test
+
+Generate coverage reports with:
+
+```bash
+make coverage
 ```
 
 ## JPL Compliance
