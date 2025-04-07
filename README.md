@@ -2,6 +2,12 @@
 
 A radiation-hardened Firefox WebDriver bypass tool developed in accordance with JPL-STD-RUST-001 Rev A.
 
+## Architecture Overview
+
+![Architecture Diagram](resources/images/architecture_diagram.png)
+
+*Figure 1: System architecture showing the binary patching workflow*
+
 ## Overview
 
 This tool patches Firefox's `libxul.so` binary to bypass WebDriver detection mechanisms, allowing for automated browser testing without being detected as automation. It's implemented using memory-safe, radiation-hardened patterns suitable for mission-critical applications.
