@@ -898,15 +898,12 @@ mod tests {
         println!("Test finished, running teardown...");
         teardown()?;
 
-        match test_result {
-            Ok(res) => res,
-            Err(e) => {
-                println!("Test timed out: {:?}", e);
-                Err(thirtyfour::error::WebDriverError::FatalError(
-                    "Test timed out".into(),
-                ))
-            },
-        }
+        test_result.unwrap_or_else(|e| {
+            println!("Test timed out: {:?}", e);
+            Err(thirtyfour::error::WebDriverError::FatalError(
+                "Test timed out".into(),
+            ))
+        })
     }
 
     #[test]
