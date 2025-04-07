@@ -4,7 +4,7 @@ A radiation-hardened Firefox WebDriver bypass tool developed in accordance with 
 
 ## Architecture Overview
 
-![Architecture Diagram](resources/images/a 1: System architecture showing the binary patching workflow*
+![System architecture showing the binary patching workflow](resources/images/architecture_diagram.png)
 *Figure 1: System architecture showing the binary patching workflow*
 
 ## Overview
@@ -25,11 +25,12 @@ This tool patches Firefox's `libxul.so` binary to bypass WebDriver detection mec
 The following screenshots demonstrate successful bypass of automation detection:
 
 ### SannySoft Detection Test
-![SannySoft Detection Bypass](proof/sannyJS Detection Test
-### CreepJS Detection Test
-![CreepJS Detection Bypass](proof/creeps 2-3: Automation detection bypass proof on common detection platforms*
+![SannySoft detection bypass](proof/sannysoft_detection_131605.png)
+*Figure 2: SannySoft detection bypass*
 
-*Figures 2-3: Automation detection bypass proof on common detection platforms*
+### CreepJS Detection Test
+![CreepJS detection bypass](proof/creepjs_detection_131610.png)
+*Figure 3: CreepJS detection bypass*
 
 ## Installation
 
