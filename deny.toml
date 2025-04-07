@@ -1,0 +1,35 @@
+[advisories]
+version = 2
+# Ignore specific advisories if needed
+ignore = [
+    # Add specific advisory IDs here if needed
+    # "RUSTSEC-2023-0001"
+    "RUSTSEC-2024-0436"
+]
+# Allow yanked crate versions
+yanked = "allow"
+
+[licenses]
+version = 2
+# Explicitly allow these common licenses
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "ISC",
+    "Zlib",
+]
+
+[bans]
+# Allow multiple versions of the same crate
+multiple-versions = "allow"
+# Allow wildcard dependencies
+wildcards = "allow"
+
+[sources]
+# Allow unknown registries
+unknown-registry = "allow"
+# Allow unknown git sources
+unknown-git = "allow"

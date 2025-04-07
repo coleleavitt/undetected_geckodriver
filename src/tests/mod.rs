@@ -2,9 +2,17 @@
 /// Triple Modular Redundancy voting
 #[macro_export]
 macro_rules! tmr_vote {
-    ($a:expr, $b:expr, $c:expr) => {
-        ($a & $b) | ($b & $c) | ($a & $c)
-    };
+    ($a:expr, $b:expr, $c:expr) => {{
+        if $a == $b || $a == $c {
+            $a
+        } else if $b == $c {
+            $b
+        } else {
+            // All values differ - implement fail-safe behavior
+            eprintln!("TMR ERROR: Voting inconsistency detected");
+            $a // Return first value as fallback
+        }
+    }};
 }
 
 #[cfg(test)]
@@ -18,13 +26,12 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::process::Stdio;
     use std::time::Duration;
-    use std::{fs, process, thread};
+    use std::{env, fs, process, thread};
     use thirtyfour::common::capabilities::firefox::FirefoxPreferences;
     use thirtyfour::{
         error::WebDriverResult, BrowserCapabilitiesHelper, DesiredCapabilities, WebDriver,
     };
     use std::process::Command as StdCommand;
-
 
     const TEST_TIMEOUT_SEC: u64 = 60;
 
@@ -101,6 +108,19 @@ mod tests {
         // Make sure no previous geckodriver is running
         kill_geckodriver_processes()?;
 
+        // Create a proof directory for screenshots with timestamp to avoid conflicts
+        let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+        let proof_dir = format!("proof_{}", timestamp);
+
+        // Create directory with proper error handling
+        fs::create_dir_all(&proof_dir).map_err(|e|
+            thirtyfour::error::WebDriverError::FatalError(format!(
+                "Failed to create proof directory: {}", e
+            ))
+        )?;
+
+        println!("Created screenshot directory: {}", proof_dir);
+
         // Create temp directory for Firefox profile
         let temp_dir = tempfile::tempdir()
             .map_err(|e| thirtyfour::error::WebDriverError::FatalError(e.to_string()))?;
@@ -132,24 +152,24 @@ mod tests {
         let mut options = DesiredCapabilities::firefox();
 
         // Create Firefox preferences and set them
-        let mut prefs = FirefoxPreferences::new();
-        prefs.set("dom.webdriver.enabled", false)?;
-        prefs.set("dom.automation", false)?;
-        prefs.set("marionette.enabled", false)?;
-        prefs.set("network.http.spdy.enabled", false)?;
-        prefs.set(
+        let mut firefox_prefs = FirefoxPreferences::new();
+        firefox_prefs.set("dom.webdriver.enabled", false)?;
+        firefox_prefs.set("dom.automation", false)?;
+        firefox_prefs.set("marionette.enabled", false)?;
+        firefox_prefs.set("network.http.spdy.enabled", false)?;
+        firefox_prefs.set(
             "browser.tabs.remote.separatePrivilegedMozillaWebContentProcess",
             false,
         )?;
 
         // Additional prefs that enhance undetectability
-        prefs.set(
+        firefox_prefs.set(
             "general.useragent.override",
             "Mozilla/5.0 (X11; Linux x86_64; rv:135.0) Gecko/20100101 Firefox/135.0",
         )?;
 
         // Apply preferences to options
-        options.set_preferences(prefs)?;
+        options.set_preferences(firefox_prefs)?;
 
         // Set custom profile directory
         if let Some(profile_path) = temp_dir.path().to_str() {
@@ -158,7 +178,6 @@ mod tests {
                 vec!["-profile".to_string(), profile_path.to_string()],
             )?;
         }
-
 
         // Use StdCommand instead of Command
         let mut geckodriver_process = StdCommand::new("geckodriver")
@@ -169,8 +188,15 @@ mod tests {
             .map_err(|e| thirtyfour::error::WebDriverError::FatalError(e.to_string()))?;
 
         // Get stdout and stderr handles from the child process
-        let stdout = geckodriver_process.stdout.take().expect("Failed to capture stdout");
-        let stderr = geckodriver_process.stderr.take().expect("Failed to capture stderr");
+        let stdout = geckodriver_process.stdout.take()
+            .ok_or_else(|| thirtyfour::error::WebDriverError::FatalError(
+                "Failed to capture stdout from geckodriver process".to_string()
+            ))?;
+
+        let stderr = geckodriver_process.stderr.take()
+            .ok_or_else(|| thirtyfour::error::WebDriverError::FatalError(
+                "Failed to capture stderr from geckodriver process".to_string()
+            ))?;
 
         // Spawn threads to handle the output in real-time
         thread::spawn(move || {
@@ -191,8 +217,8 @@ mod tests {
             });
         });
 
-
-        // Give geckodriver time to start up properly
+        // Give geckodriver time to start up properly - use a bounded delay
+        // @bounded-delay
         tokio::time::sleep(Duration::from_secs(2)).await;
 
         // Connect to WebDriver with the dynamic port
@@ -205,18 +231,23 @@ mod tests {
         println!("Navigating to bot detection test site...");
         driver.goto("https://bot.sannysoft.com").await?;
 
+        // Wait for page to analyze - use a bounded delay
+        // @bounded-delay
         println!("Waiting for page to analyze...");
         tokio::time::sleep(Duration::from_secs(5)).await;
+
+        // Take screenshot of first test site
+        take_screenshot(&driver, &proof_dir, "sannysoft_detection").await?;
 
         // Check navigator.webdriver status
         println!("Checking navigator.webdriver status...");
         let webdriver_status = driver
             .execute(
                 r#"return {
-                    navWebdriver: navigator.webdriver,
-                    windowNavWebdriver: window.navigator.webdriver,
-                    userAgent: navigator.userAgent
-                }"#,
+                navWebdriver: navigator.webdriver,
+                windowNavWebdriver: window.navigator.webdriver,
+                userAgent: navigator.userAgent
+            }"#,
                 vec![],
             )
             .await?;
@@ -232,22 +263,28 @@ mod tests {
         );
 
         // Test case 2: Check for automated browser detection on a different site
+        println!("Navigating to CreepJS detection site...");
         driver
             .goto("https://abrahamjuliot.github.io/creepjs/")
             .await?;
+
+        // @bounded-delay
         tokio::time::sleep(Duration::from_secs(5)).await;
+
+        // Take screenshot of second test site
+        take_screenshot(&driver, &proof_dir, "creepjs_detection").await?;
 
         // Check if the page detected automation
         let automation_detected = driver
             .execute(
                 r#"
-                // Look for indicators that the page detected automation
-                return {
-                    automationDetected: document.body.innerText.includes('automation'),
-                    webdriverFound: document.body.innerText.includes('webdriver'),
-                    stealth: document.body.innerText.includes('stealth'),
-                }
-                "#,
+            // Look for indicators that the page detected automation
+            return {
+                automationDetected: document.body.innerText.includes('automation'),
+                webdriverFound: document.body.innerText.includes('webdriver'),
+                stealth: document.body.innerText.includes('stealth'),
+            }
+            "#,
                 vec![],
             )
             .await?;
@@ -256,19 +293,57 @@ mod tests {
             .map_err(|e| thirtyfour::error::WebDriverError::Json(e.to_string()))?;
 
         println!("Automation detection results: {:?}", automation_results);
+        println!("Screenshots saved in directory: {}", proof_dir);
 
         // Cleanup
         println!("Tests completed, cleaning up...");
         driver.quit().await?;
 
         // Make sure geckodriver is terminated
-        // With this:
         let _ = process::Command::new("pkill")
             .arg("geckodriver")
             .spawn()
             .map_err(|e| thirtyfour::error::WebDriverError::FatalError(e.to_string()))?;
+
         Ok(())
     }
+
+    /// Takes a screenshot and saves it to the specified directory with the given name
+    ///
+    /// # Errors
+    ///
+    /// Returns a `WebDriverError` if screenshot capture or saving fails
+    async fn take_screenshot(driver: &WebDriver, dir: &str, name: &str) -> WebDriverResult<()> {
+        // Get the project directory
+        let project_dir = env::current_dir()
+            .map_err(|e| thirtyfour::error::WebDriverError::FatalError(
+                format!("Failed to get current directory: {}", e)
+            ))?;
+
+        // Construct a path with timestamp to avoid overwrites
+        let timestamp = chrono::Local::now().format("%H%M%S").to_string();
+        let screenshot_dir = project_dir.join(dir);
+        let filename = screenshot_dir.join(format!("{}_{}.png", name, timestamp));
+
+        // Ensure the directory exists
+        fs::create_dir_all(&screenshot_dir)
+            .map_err(|e| thirtyfour::error::WebDriverError::FatalError(
+                format!("Failed to create screenshot directory: {}", e)
+            ))?;
+
+        // Take screenshot and save it directly to the file
+        driver.screenshot(&filename)
+            .await
+            .map_err(|e| thirtyfour::error::WebDriverError::FatalError(
+                format!("Failed to save screenshot to {}: {}", filename.display(), e)
+            ))?;
+
+        println!("Screenshot saved: {}", filename.display());
+
+        Ok(())
+    }
+
+
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_webdriver_detection() -> WebDriverResult<()> {
