@@ -6,13 +6,18 @@
 //!
 //! JPL-STD-RUST-001 Rev A compliant implementation
 
+mod tests;
+
 use goblin::elf::Elf;
 use rand::rngs::StdRng;
 use rand::{RngCore, SeedableRng};
 use std::{
     env, fs,
-    io::{Read, Write, BufReader, BufWriter},
-    path::Path,
+    io::{BufReader, BufWriter, Read, Write},
+    net::TcpListener,
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+    thread,
     time::{Duration, Instant},
 };
 
@@ -24,13 +29,10 @@ const MAX_PATTERN_LENGTH: usize = 128;
 const SEED: u64 = 0x5AFE_C0DE_DEAD_BEEF;
 const TIMEOUT_MS: u64 = 120_000; // Extended timeout for larger files
 const BUFFER_SIZE: usize = 65536; // 64KB buffer for I/O operations
+const SYSTEM_FIREFOX_DIR: &str = "/opt/firefox/";
+const WEBDRIVER_STRING: &[u8] = b"webdriver";
 
-/// Triple Modular Redundancy voting
-macro_rules! tmr_vote {
-    ($a:expr, $b:expr, $c:expr) => {
-        ($a & $b) | ($b & $c) | ($a & $c)
-    };
-}
+
 
 // -----------
 // Error Types
@@ -42,6 +44,7 @@ pub enum PatcherError {
     InvalidInput(String),
     TimingViolation(String),
     MemoryExceeded(String),
+    SystemOperation(String),
 }
 
 impl From<std::io::Error> for PatcherError {
@@ -62,11 +65,7 @@ pub trait BinaryLoader {
 
 pub trait PatternDetector {
     fn detection_patterns(&self) -> &[&[u8]];
-    fn find_patterns<'a>(
-        &self,
-        data: &'a [u8],
-        pattern: &[u8],
-    ) -> Vec<(usize, &'a [u8])>;
+    fn find_patterns<'a>(&self, data: &'a [u8], pattern: &[u8]) -> Vec<(usize, &'a [u8])>;
 }
 
 pub trait PatternReplacer {
@@ -153,11 +152,7 @@ impl PatternDetector for WebdriverDetector {
         &self.patterns
     }
 
-    fn find_patterns<'a>(
-        &self,
-        data: &'a [u8],
-        pattern: &[u8],
-    ) -> Vec<(usize, &'a [u8])> {
+    fn find_patterns<'a>(&self, data: &'a [u8], pattern: &[u8]) -> Vec<(usize, &'a [u8])> {
         let mut matches = Vec::new();
         let mut pos = 0;
 
@@ -173,8 +168,10 @@ impl PatternDetector for WebdriverDetector {
 
             // Limit excessive matches to prevent DoS
             if matches.len() >= 1000 {
-                println!("Warning: Pattern match limit reached for '{}'",
-                         String::from_utf8_lossy(pattern));
+                println!(
+                    "Warning: Pattern match limit reached for '{}'",
+                    String::from_utf8_lossy(pattern)
+                );
                 break;
             }
         }
@@ -194,11 +191,13 @@ impl SeuResistantReplacer {
         // Restrict replacement to MAX_PATTERN_LENGTH
         let safe_len = std::cmp::min(len, MAX_PATTERN_LENGTH);
 
-        (0..safe_len).map(|_| {
-            let mut byte = self.0.next_u32() as u8;
-            byte |= 0x01; // Ensure odd parity
-            byte
-        }).collect()
+        (0..safe_len)
+            .map(|_| {
+                let mut byte = self.0.next_u32() as u8;
+                byte |= 0x01; // Ensure odd parity
+                byte
+            })
+            .collect()
     }
 }
 
@@ -311,7 +310,12 @@ where
     F: FileOperations,
 {
     pub fn new(loader: L, detector: D, replacer: R, file_ops: F) -> Self {
-        Self { loader, detector, replacer, file_ops }
+        Self {
+            loader,
+            detector,
+            replacer,
+            file_ops,
+        }
     }
 
     pub fn run(&self, path: &str) -> Result<usize> {
@@ -335,21 +339,26 @@ where
         let sections = [".rodata", ".data", ".text", ".rdata"];
 
         for section in &sections {
-            if let Some(shdr) = elf.section_headers.iter()
+            if let Some(shdr) = elf
+                .section_headers
+                .iter()
                 .find(|s| elf.shdr_strtab.get_at(s.sh_name) == Some(section))
             {
-                println!("Processing section: {} ({:.2}MB)",
-                         section, shdr.sh_size as f64 / 1_048_576.0);
+                println!(
+                    "Processing section: {} ({:.2}MB)",
+                    section,
+                    shdr.sh_size as f64 / 1_048_576.0
+                );
 
                 let section_patches = self.process_section(shdr, &data, &mut patched)?;
                 println!("Found {} patterns in {}", section_patches, section);
                 total += section_patches;
 
                 if start.elapsed() > Duration::from_millis(TIMEOUT_MS) {
-                    return Err(PatcherError::TimingViolation(
-                        format!("Processing timeout after {}s",
-                                start.elapsed().as_secs())
-                    ));
+                    return Err(PatcherError::TimingViolation(format!(
+                        "Processing timeout after {}s",
+                        start.elapsed().as_secs()
+                    )));
                 }
             } else {
                 println!("Section {} not found, skipping", section);
@@ -378,9 +387,10 @@ where
 
         // Bounds validation to prevent OOB access
         if start >= data.len() {
-            return Err(PatcherError::InvalidInput(
-                format!("Section offset 0x{:x} exceeds binary size", start)
-            ));
+            return Err(PatcherError::InvalidInput(format!(
+                "Section offset 0x{:x} exceeds binary size",
+                start
+            )));
         }
 
         let end = std::cmp::min(start + size, data.len());
@@ -389,30 +399,29 @@ where
         let mut count = 0;
         for pattern in self.detector.detection_patterns() {
             for (offset, matched) in self.detector.find_patterns(section_data, pattern) {
-                let replacement = self.replacer.replace_pattern(
-                    patched,
-                    start + offset,
-                    pattern
-                );
+                let replacement = self.replacer.replace_pattern(patched, start + offset, pattern);
 
                 if !replacement.is_empty() {
                     // Print hex representation of the pattern and replacement
-                    let pattern_hex = matched.iter()
+                    let pattern_hex = matched
+                        .iter()
                         .map(|b| format!("{:02x}", b))
                         .collect::<Vec<_>>()
                         .join(" ");
 
-                    let replacement_hex = replacement.iter()
+                    let replacement_hex = replacement
+                        .iter()
                         .take(4)
                         .map(|b| format!("{:02x}", b))
                         .collect::<Vec<_>>()
                         .join(" ");
 
-                    println!("  Patched '{}' @ 0x{:x} [{} -> {}...]",
-                             String::from_utf8_lossy(matched),
-                             start + offset,
-                             pattern_hex,
-                             replacement_hex
+                    println!(
+                        "  Patched '{}' @ 0x{:x} [{} -> {}...]",
+                        String::from_utf8_lossy(matched),
+                        start + offset,
+                        pattern_hex,
+                        replacement_hex
                     );
 
                     count += 1;
@@ -439,6 +448,147 @@ fn print_preferences() {
     println!("user_pref(\"remote.enabled\", false);");
     println!("user_pref(\"remote.log.level\", \"Fatal\");");
     println!("user_pref(\"remote.force-local\", true);");
+}
+
+// System Operations for Firefox patching
+pub struct SystemOperations;
+
+impl SystemOperations {
+    pub fn get_firefox_binary() -> PathBuf {
+        env::args()
+            .nth(1)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/opt/firefox/firefox"))
+    }
+
+    pub fn find_free_port() -> Result<u16> {
+        TcpListener::bind("127.0.0.1:0")
+            .map(|listener| listener.local_addr().unwrap().port())
+            .map_err(|e| PatcherError::SystemOperation(format!("Failed to bind to address: {}", e)))
+    }
+
+    pub fn backup_original_libxul() -> Result<()> {
+        let orig_path = Path::new(SYSTEM_FIREFOX_DIR).join("libxul.so");
+        let backup_path = Path::new(SYSTEM_FIREFOX_DIR).join("libxul.so.bak");
+
+        if !backup_path.exists() {
+            println!("Creating backup at {}", backup_path.display());
+            println!("You may be prompted for your password by a graphical dialog");
+
+            // Use pkexec for graphical authentication dialog
+            let status = Command::new("pkexec")
+                .args(["cp", orig_path.to_str().unwrap(), backup_path.to_str().unwrap()])
+                .status()
+                .map_err(|e| {
+                    PatcherError::SystemOperation(format!("Backup failed: {}", e))
+                })?;
+
+            if !status.success() {
+                return Err(PatcherError::SystemOperation("Backup command failed".into()));
+            }
+        }
+        Ok(())
+    }
+
+    // System Operations for Firefox patching (continued)
+    pub fn restore_original_libxul() -> Result<()> {
+        let orig_path = Path::new(SYSTEM_FIREFOX_DIR).join("libxul.so");
+        let backup_path = Path::new(SYSTEM_FIREFOX_DIR).join("libxul.so.bak");
+
+        if backup_path.exists() {
+            println!("Restoring backup from {}", backup_path.display());
+            println!("You may be prompted for your password by a graphical dialog");
+
+            // Use pkexec for consistency with backup function
+            let status = Command::new("pkexec")
+                .args(["cp", backup_path.to_str().unwrap(), orig_path.to_str().unwrap()])
+                .status()
+                .map_err(|e| {
+                    PatcherError::SystemOperation(format!("Restore failed: {}", e))
+                })?;
+
+            if !status.success() {
+                return Err(PatcherError::SystemOperation("Restore command failed".into()));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn kill_geckodriver_processes() -> Result<()> {
+        // Try to find and kill any existing geckodriver processes
+        if let Ok(output) = Command::new("pgrep").arg("geckodriver").output() {
+            if !output.stdout.is_empty() {
+                // Found running geckodriver processes
+                Command::new("pkill")
+                    .arg("geckodriver")
+                    .output()
+                    .map_err(|e| {
+                        PatcherError::SystemOperation(format!(
+                            "Failed to kill existing geckodriver processes: {}",
+                            e
+                        ))
+                    })?;
+                // Give processes time to terminate
+                thread::sleep(Duration::from_secs(1));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn patch_libxul() -> Result<()> {
+        let xul_path = Path::new(SYSTEM_FIREFOX_DIR).join("libxul.so");
+
+        // Read file
+        let mut data = fs::read(&xul_path)
+            .map_err(|e| PatcherError::SystemOperation(e.to_string()))?;
+
+        // Generate random string of the same length
+        let random_string: Vec<u8> = (0..WEBDRIVER_STRING.len())
+            .map(|_| rand::random::<u8>())
+            .collect();
+
+        // Count occurrences before patching
+        let occurrences_before = data.windows(WEBDRIVER_STRING.len())
+            .filter(|window| *window == WEBDRIVER_STRING)
+            .count();
+
+        println!("Found {} occurrences of 'webdriver' in libxul.so", occurrences_before);
+
+        // Replace all occurrences
+        let mut i = 0;
+        let mut replaced = 0;
+        while i <= data.len() - WEBDRIVER_STRING.len() {
+            if data[i..(i + WEBDRIVER_STRING.len())] == WEBDRIVER_STRING[..] {
+                data[i..(i + WEBDRIVER_STRING.len())].copy_from_slice(&random_string);
+                replaced += 1;
+                i += WEBDRIVER_STRING.len();
+            } else {
+                i += 1;
+            }
+        }
+
+        if replaced > 0 {
+            println!("Replaced {} occurrences of 'webdriver'", replaced);
+
+            // Write patched file using sudo/pkexec
+            Command::new("pkexec")
+                .args(["tee", xul_path.to_str().unwrap()])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .spawn()
+                .map_err(|e| PatcherError::SystemOperation(e.to_string()))?
+                .stdin
+                .unwrap()
+                .write_all(&data)
+                .map_err(|e| PatcherError::SystemOperation(e.to_string()))?;
+
+            println!("Patched libxul.so successfully");
+        } else {
+            println!("No occurrences of 'webdriver' found to patch in libxul.so");
+        }
+
+        Ok(())
+    }
 }
 
 // ----------
@@ -478,458 +628,5 @@ fn main() -> Result<()> {
 
             Err(e)
         }
-    }
-}
-
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//
-//     #[test]
-//     fn test_tmr_vote() {
-//         // Test the Triple Modular Redundancy voting mechanism
-//         assert_eq!(tmr_vote!(1, 1, 1), 1);
-//         assert_eq!(tmr_vote!(1, 1, 0), 1);
-//         assert_eq!(tmr_vote!(1, 0, 1), 1);
-//         assert_eq!(tmr_vote!(0, 1, 1), 1);
-//         assert_eq!(tmr_vote!(0, 0, 1), 0);
-//         assert_eq!(tmr_vote!(0, 1, 0), 0);
-//         assert_eq!(tmr_vote!(1, 0, 0), 0);
-//         assert_eq!(tmr_vote!(0, 0, 0), 0);
-//     }
-//
-//     #[test]
-//     fn test_pattern_length_validation() {
-//         // Verify MAX_PATTERN_LENGTH enforcement
-//         let replacer = SeuResistantReplacer::new();
-//         let mut data = vec![0u8; 256];
-//
-//         // Test with pattern at MAX_PATTERN_LENGTH limit
-//         let valid_pattern = vec![1u8; MAX_PATTERN_LENGTH];
-//         let result = replacer.replace_pattern(&mut data, 0, &valid_pattern);
-//         assert!(!result.is_empty());
-//
-//         // Test with pattern exceeding MAX_PATTERN_LENGTH
-//         let invalid_pattern = vec![1u8; MAX_PATTERN_LENGTH + 1];
-//         let result = replacer.replace_pattern(&mut data, 0, &invalid_pattern);
-//         assert!(result.is_empty());
-//     }
-//
-//     // Additional tests would verify radiation hardening properties
-//     // and timing constraints (omitted for brevity)
-// }
-//
-#[cfg(test)]
-mod tests {
-    use rand::random;
-    use serde_json::Value;
-    use std::{
-        env, fs,
-        io::{BufRead, BufReader, Read, Write},
-        net::TcpListener,
-        path::{Path, PathBuf},
-        process::{Command, Stdio},
-        thread,
-        time::Duration,
-    };
-    use thirtyfour::{error::WebDriverResult, BrowserCapabilitiesHelper, DesiredCapabilities, WebDriver};
-    use thirtyfour::common::capabilities::firefox::FirefoxPreferences;
-
-    const SYSTEM_FIREFOX_DIR: &str = "/opt/firefox/";
-    const TEST_TIMEOUT_SEC: u64 = 60;
-    const WEBDRIVER_STRING: &[u8] = b"webdriver";
-
-    // Helper functions
-    fn get_firefox_binary() -> PathBuf {
-        env::args()
-            .nth(1)
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("/opt/firefox/firefox"))
-    }
-
-    // Find available port to avoid conflicts
-    fn find_free_port() -> u16 {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("Failed to bind to address");
-        listener.local_addr().unwrap().port()
-    }
-
-    fn backup_original_libxul() -> WebDriverResult<()> {
-        let orig_path = Path::new(SYSTEM_FIREFOX_DIR).join("libxul.so");
-        let backup_path = Path::new(SYSTEM_FIREFOX_DIR).join("libxul.so.bak");
-
-        if !backup_path.exists() {
-            println!("Creating backup at {}", backup_path.display());
-            println!("You may be prompted for your password by a graphical dialog");
-
-            // Use pkexec for graphical authentication dialog
-            let status = Command::new("pkexec")
-                .args(["cp", orig_path.to_str().unwrap(), backup_path.to_str().unwrap()])
-                .status()
-                .map_err(|e| {
-                    thirtyfour::error::WebDriverError::FatalError(format!(
-                        "Backup failed: {}",
-                        e
-                    ))
-                })?;
-
-            if !status.success() {
-                return Err(thirtyfour::error::WebDriverError::FatalError(
-                    "Backup command failed".into(),
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    fn restore_original_libxul() -> WebDriverResult<()> {
-        let orig_path = Path::new(SYSTEM_FIREFOX_DIR).join("libxul.so");
-        let backup_path = Path::new(SYSTEM_FIREFOX_DIR).join("libxul.so.bak");
-
-        if backup_path.exists() {
-            println!("Restoring backup from {}", backup_path.display());
-            println!("You may be prompted for your password by a graphical dialog");
-
-            // Use pkexec for consistency with backup function
-            let status = Command::new("pkexec")
-                .args(["cp", backup_path.to_str().unwrap(), orig_path.to_str().unwrap()])
-                .status()
-                .map_err(|e| {
-                    thirtyfour::error::WebDriverError::FatalError(format!(
-                        "Restore failed: {}",
-                        e
-                    ))
-                })?;
-
-            if !status.success() {
-                return Err(thirtyfour::error::WebDriverError::FatalError(
-                    "Restore command failed".into(),
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    // Kill any existing geckodriver processes
-    fn kill_geckodriver_processes() -> WebDriverResult<()> {
-        // Try to find and kill any existing geckodriver processes
-        if let Ok(output) = Command::new("pgrep").arg("geckodriver").output() {
-            if !output.stdout.is_empty() {
-                // Found running geckodriver processes
-                Command::new("pkill")
-                    .arg("geckodriver")
-                    .output()
-                    .map_err(|e| {
-                        thirtyfour::error::WebDriverError::FatalError(format!(
-                            "Failed to kill existing geckodriver processes: {}",
-                            e
-                        ))
-                    })?;
-                // Give processes time to terminate
-                thread::sleep(Duration::from_secs(1));
-            }
-        }
-        Ok(())
-    }
-
-    // Patch libxul.so to remove webdriver detection
-    fn patch_libxul() -> WebDriverResult<()> {
-        let xul_path = Path::new(SYSTEM_FIREFOX_DIR).join("libxul.so");
-
-        // Read file
-        let mut data = fs::read(&xul_path)
-            .map_err(|e| thirtyfour::error::WebDriverError::FatalError(e.to_string()))?;
-
-        // Generate random string of the same length - fix deprecated function calls
-        let random_string: Vec<u8> = (0..WEBDRIVER_STRING.len())
-            .map(|_| random::<u8>())
-            .collect();
-
-        // Count occurrences before patching
-        let occurrences_before = data.windows(WEBDRIVER_STRING.len())
-            .filter(|window| *window == WEBDRIVER_STRING)
-            .count();
-
-        println!("Found {} occurrences of 'webdriver' in libxul.so", occurrences_before);
-
-        // Replace all occurrences
-        let mut i = 0;
-        let mut replaced = 0;
-        while i <= data.len() - WEBDRIVER_STRING.len() {
-            if data[i..(i + WEBDRIVER_STRING.len())] == WEBDRIVER_STRING[..] {
-                data[i..(i + WEBDRIVER_STRING.len())].copy_from_slice(&random_string);
-                replaced += 1;
-                i += WEBDRIVER_STRING.len();
-            } else {
-                i += 1;
-            }
-        }
-
-        if replaced > 0 {
-            println!("Replaced {} occurrences of 'webdriver'", replaced);
-
-            // Write patched file using sudo/pkexec
-            Command::new("pkexec")
-                .args(["tee", xul_path.to_str().unwrap()])
-                .stdin(Stdio::piped())
-                .stdout(Stdio::null())
-                .spawn()
-                .map_err(|e| thirtyfour::error::WebDriverError::FatalError(e.to_string()))?
-                .stdin
-                .unwrap()
-                .write_all(&data)
-                .map_err(|e| thirtyfour::error::WebDriverError::FatalError(e.to_string()))?;
-
-            println!("Patched libxul.so successfully");
-        } else {
-            println!("No occurrences of 'webdriver' found to patch in libxul.so");
-        }
-
-        Ok(())
-    }
-
-    // Test setup/teardown
-    fn setup() -> WebDriverResult<()> {
-        // Ensure no geckodriver is running
-        kill_geckodriver_processes()?;
-
-        // Backup and patch Firefox
-        backup_original_libxul()?;
-
-        // Patch libxul.so
-        patch_libxul()?;
-
-        // Wait a moment to ensure file operations complete
-        thread::sleep(Duration::from_millis(500));
-        Ok(())
-    }
-
-    fn teardown() -> WebDriverResult<()> {
-        // Always try to kill geckodriver processes before returning
-        let _ = kill_geckodriver_processes();
-
-        // Restore the original libxul.so
-        match restore_original_libxul() {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                eprintln!("Warning: Failed to restore original libxul.so: {}", e);
-                // Still consider this a success to not fail the test
-                // if we can't restore the backup
-                Ok(())
-            }
-        }
-    }
-
-    // Core test logic
-    async fn run_webdriver_test() -> WebDriverResult<()> {
-        // Make sure no previous geckodriver is running
-        kill_geckodriver_processes()?;
-
-        // Create temp directory for Firefox profile
-        let temp_dir = tempfile::tempdir()
-            .map_err(|e| thirtyfour::error::WebDriverError::FatalError(e.to_string()))?;
-
-        // Create user.js file with required preferences
-        let user_js_path = temp_dir.path().join("user.js");
-        let mut file = fs::File::create(&user_js_path)
-            .map_err(|e| thirtyfour::error::WebDriverError::FatalError(e.to_string()))?;
-
-        // Essential Firefox preferences to disable webdriver detection
-        let prefs = [
-            "user_pref(\"dom.webdriver.enabled\", false);",
-            "user_pref(\"dom.automation\", false);",
-            "user_pref(\"marionette.enabled\", false);",
-            "user_pref(\"network.http.spdy.enabled\", false);",
-            "user_pref(\"browser.tabs.remote.separatePrivilegedMozillaWebContentProcess\", false);",
-        ];
-
-        for pref in prefs {
-            writeln!(file, "{}", pref)
-                .map_err(|e| thirtyfour::error::WebDriverError::FatalError(e.to_string()))?;
-        }
-
-        // Use a dynamically assigned free port
-        let port = find_free_port();
-        println!("Starting geckodriver on port {}", port);
-
-        // Configure Firefox with our preferences
-        let mut options = DesiredCapabilities::firefox();
-
-        // Create Firefox preferences and set them
-        let mut prefs = FirefoxPreferences::new();
-        prefs.set("dom.webdriver.enabled", false)?;
-        prefs.set("dom.automation", false)?;
-        prefs.set("marionette.enabled", false)?;
-        prefs.set("network.http.spdy.enabled", false)?;
-        prefs.set("browser.tabs.remote.separatePrivilegedMozillaWebContentProcess", false)?;
-
-        // Additional prefs that enhance undetectability
-        prefs.set("general.useragent.override", "Mozilla/5.0 (X11; Linux x86_64; rv:135.0) Gecko/20100101 Firefox/135.0")?;
-
-        // Apply preferences to options
-        options.set_preferences(prefs)?;
-
-        // Set custom profile directory
-        if let Some(profile_path) = temp_dir.path().to_str() {
-            options.insert_browser_option("args", vec!["-profile".to_string(), profile_path.to_string()])?;
-        }
-
-        // Start geckodriver
-        let mut geckodriver = Command::new("geckodriver")
-            .args(["--port", &port.to_string(), "--log", "trace"])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| thirtyfour::error::WebDriverError::FatalError(e.to_string()))?;
-
-        // Log streaming
-        let stdout = geckodriver.stdout.take().unwrap();
-        let stderr = geckodriver.stderr.take().unwrap();
-
-        thread::spawn(move || {
-            BufReader::new(stdout).lines().for_each(|line| {
-                if let Ok(line) = line {
-                    println!("GECKODRIVER: {}", line);
-                }
-            });
-        });
-
-        thread::spawn(move || {
-            BufReader::new(stderr).lines().for_each(|line| {
-                if let Ok(line) = line {
-                    println!("GECKODRIVER ERR: {}", line);
-                }
-            });
-        });
-
-        // Give geckodriver time to start up properly
-        tokio::time::sleep(Duration::from_secs(2)).await;
-
-        // Connect to WebDriver with the dynamic port
-        let webdriver_url = format!("http://localhost:{}", port);
-        println!("Connecting to WebDriver at {}", webdriver_url);
-
-        let driver = WebDriver::new(webdriver_url, options).await?;
-
-        // Test case 1: Basic detection test
-        println!("Navigating to bot detection test site...");
-        driver.goto("https://bot.sannysoft.com").await?;
-
-        println!("Waiting for page to analyze...");
-        tokio::time::sleep(Duration::from_secs(5)).await;
-
-        // Check navigator.webdriver status
-        println!("Checking navigator.webdriver status...");
-        let webdriver_status = driver
-            .execute(
-                r#"return {
-                    navWebdriver: navigator.webdriver,
-                    windowNavWebdriver: window.navigator.webdriver,
-                    userAgent: navigator.userAgent
-                }"#,
-                vec![],
-            )
-            .await?;
-
-        let status_value: Value = serde_json::from_value(webdriver_status.json().clone())
-            .map_err(|e| thirtyfour::error::WebDriverError::Json(e.to_string()))?;
-
-        // Accept either null or false as successful (both indicate webdriver was hidden)
-        assert!(
-            status_value["navWebdriver"].is_null() || status_value["navWebdriver"] == false,
-            "navigator.webdriver detected: {:?}",
-            status_value["navWebdriver"]
-        );
-
-        // Test case 2: Check for automated browser detection on a different site
-        driver.goto("https://abrahamjuliot.github.io/creepjs/").await?;
-        tokio::time::sleep(Duration::from_secs(5)).await;
-
-        // Check if the page detected automation
-        let automation_detected = driver
-            .execute(
-                r#"
-                // Look for indicators that the page detected automation
-                return {
-                    automationDetected: document.body.innerText.includes('automation'),
-                    webdriverFound: document.body.innerText.includes('webdriver'),
-                    stealth: document.body.innerText.includes('stealth'),
-                }
-                "#,
-                vec![],
-            )
-            .await?;
-
-        let automation_results: Value = serde_json::from_value(automation_detected.json().clone())
-            .map_err(|e| thirtyfour::error::WebDriverError::Json(e.to_string()))?;
-
-        println!("Automation detection results: {:?}", automation_results);
-
-        // Cleanup
-        println!("Tests completed, cleaning up...");
-        driver.quit().await?;
-
-        // Make sure geckodriver is terminated
-        let _ = geckodriver.kill();
-        Ok(())
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_webdriver_detection() -> WebDriverResult<()> {
-        println!("Starting webdriver detection test");
-
-        // Setup with panic handling and guaranteed cleanup
-        let setup_result = std::panic::catch_unwind(setup);
-        if let Err(e) = &setup_result {
-            println!("Setup panicked: {:?}", e);
-            teardown()?;
-            return Err(thirtyfour::error::WebDriverError::FatalError(
-                "Test setup panicked".into(),
-            ));
-        }
-
-        // Run test with timeout
-        println!("Setup completed, running test with timeout...");
-        let test_result = tokio::time::timeout(
-            Duration::from_secs(TEST_TIMEOUT_SEC),
-            run_webdriver_test(),
-        ).await;
-
-        // Always attempt cleanup
-        println!("Test finished, running teardown...");
-        teardown()?;
-
-        test_result.unwrap_or_else(|e| {
-            println!("Test timed out: {:?}", e);
-            Err(thirtyfour::error::WebDriverError::FatalError(
-                "Test timed out".into(),
-            ))
-        })
-    }
-
-    #[test]
-    fn verify_patched_binary() {
-        let firefox_binary = get_firefox_binary();
-        println!("Verifying patched binary at: {}", firefox_binary.display());
-
-        // Verify that Firefox binary exists
-        assert!(firefox_binary.exists(), "Firefox binary not found at {}", firefox_binary.display());
-
-        // Verify that our patching worked by checking for webdriver string
-        let orig_path = Path::new(SYSTEM_FIREFOX_DIR).join("libxul.so");
-        let mut file_data = Vec::new();
-
-        // Read Firefox libxul.so
-        let mut file = fs::File::open(&orig_path).expect(&format!("Failed to open {}", orig_path.display()));
-        file.read_to_end(&mut file_data).expect("Failed to read libxul.so");
-
-        // Count occurrences of "webdriver" string
-        let webdriver_occurrences = file_data.windows(WEBDRIVER_STRING.len())
-            .filter(|window| *window == WEBDRIVER_STRING)
-            .count();
-
-        println!("Found {} occurrences of 'webdriver' in libxul.so", webdriver_occurrences);
-
-        // Print verification result
-        println!("Binary verification successful");
     }
 }
